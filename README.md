@@ -1,7 +1,7 @@
 
 # Perturbo
 
-> **An agentic AI tool for in silico gene perturbation across diseases — powered by spatial transcriptomics, causal discovery, and a Fireworks LLM backend.**
+> **An agentic AI tool for in silico gene perturbation across diseases, powered by spatial transcriptomics, causal discovery, and a Fireworks LLM backend.**
 
 Built for the **AMD Developer Hackathon Act II, Track 3 (Unicorn)**.
 
@@ -21,11 +21,11 @@ This is not a search engine over papers. It is a **causal reasoning system** bui
 
 ---
 
-## Not only for one disease — a rich, swappable environment
+## Not only for one disease - a rich, swappable environment
 
-We built and validated Perturbo on two matched pancreatic ductal adenocarcinoma (PDAC) sections — one primary tumour (T11) and one metastatic sample (HM11) — because that is the disease context we work in and had matched data for. But Perturbo is not PDAC-specific, and this is central to the product, not a footnote.
+We built and validated Perturbo on two matched pancreatic ductal adenocarcinoma (PDAC) sections, one primary tumour (T11) and one metastatic sample (HM11), because that is the disease context we work in and had matched data for. But Perturbo is not PDAC-specific, and this is central to the product, not a footnote.
 
-The underlying environment is deliberately generic: it consumes a spatial transcriptomics object (`.h5ad`) and a driver gene table, and everything downstream — the causal coupling model, the counterfactual perturbation, the bootstrap-calibrated direction calls, the clinical trial lookup — operates on whatever tissue compartments and gene panel are provided. There is nothing pancreatic-specific hard-coded into the reasoning.
+The underlying environment is deliberately generic: it consumes a spatial transcriptomics object (`.h5ad`) and a driver gene table, and everything downstream — the causal coupling model, the counterfactual perturbation, the bootstrap-calibrated direction calls, the clinical trial lookup, operates on whatever tissue compartments and gene panel are provided. There is nothing pancreatic-specific hard-coded into the reasoning.
 
 That means Perturbo can be pointed at:
 
@@ -71,7 +71,7 @@ with explicit uncertainty and a reasoning chain
 Web interface displays the full result
 ```
 
-The agentic element is real: if the user provides no gene, the system autonomously selects candidates from the trained coupling matrix based on effect size, bootstrap stability, and literature support — it does not wait to be told what to look for.
+The agentic element is real: if the user provides no gene, the system autonomously selects candidates from the trained coupling matrix based on effect size, bootstrap stability, and literature support.
 
 ---
 
