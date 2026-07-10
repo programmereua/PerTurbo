@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PerTurbo — spatial target discovery</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48ZyBzdHJva2Utd2lkdGg9IjUiIGZpbGw9Im5vbmUiPjxsaW5lIHgxPSI1MCIgeTE9IjUwIiB4Mj0iODIiIHkyPSIyNiIgc3Ryb2tlPSIjRUY4RjZFIi8+PGxpbmUgeDE9IjUwIiB5MT0iNTAiIHgyPSI4NiIgeTI9IjU4IiBzdHJva2U9IiM1QkIzQTYiLz48bGluZSB4MT0iNTAiIHkxPSI1MCIgeDI9IjY0IiB5Mj0iODYiIHN0cm9rZT0iI0VGOEY2RSIvPjxsaW5lIHgxPSI1MCIgeTE9IjUwIiB4Mj0iMTgiIHkyPSI3MCIgc3Ryb2tlPSIjNUJCM0E2Ii8+PGxpbmUgeDE9IjUwIiB5MT0iNTAiIHgyPSIyNCIgeTI9IjMwIiBzdHJva2U9IiNFRjhGNkUiLz48L2c+PGNpcmNsZSBjeD0iODIiIGN5PSIyNiIgcj0iOSIgZmlsbD0iI0RCQUU1RiIvPjxjaXJjbGUgY3g9Ijg2IiBjeT0iNTgiIHI9IjgiIGZpbGw9IiM4NEI2QUIiLz48Y2lyY2xlIGN4PSI2NCIgY3k9Ijg2IiByPSI4IiBmaWxsPSIjQzk4QUMwIi8+PGNpcmNsZSBjeD0iMTgiIGN5PSI3MCIgcj0iOCIgZmlsbD0iIzg0QjZBQiIvPjxjaXJjbGUgY3g9IjI0IiBjeT0iMzAiIHI9IjgiIGZpbGw9IiNDOThBQzAiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSIxOCIgZmlsbD0iI0U2QTg1QyIvPjwvc3ZnPg==">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;450;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="intro">
+  <svg class="mk" viewBox="0 0 100 100">
+    <g stroke-width="3.5" fill="none">
+      <line class="draw" x1="50" y1="50" x2="82" y2="26" stroke="#EF8F6E" style="animation-delay:.1s"/>
+      <line class="draw" x1="50" y1="50" x2="86" y2="58" stroke="#5BB3A6" style="animation-delay:.2s"/>
+      <line class="draw" x1="50" y1="50" x2="64" y2="86" stroke="#EF8F6E" style="animation-delay:.3s"/>
+      <line class="draw" x1="50" y1="50" x2="18" y2="70" stroke="#5BB3A6" style="animation-delay:.4s"/>
+      <line class="draw" x1="50" y1="50" x2="24" y2="30" stroke="#EF8F6E" style="animation-delay:.5s"/>
+    </g>
+    <circle class="pop" cx="82" cy="26" r="6" fill="#DBAE5F" style="animation-delay:.6s"/>
+    <circle class="pop" cx="86" cy="58" r="5" fill="#84B6AB" style="animation-delay:.7s"/>
+    <circle class="pop" cx="64" cy="86" r="5" fill="#C98AC0" style="animation-delay:.8s"/>
+    <circle class="pop" cx="18" cy="70" r="5" fill="#84B6AB" style="animation-delay:.9s"/>
+    <circle class="pop" cx="24" cy="30" r="5" fill="#C98AC0" style="animation-delay:1s"/>
+    <circle class="pop" cx="50" cy="50" r="15" fill="#E6A85C" style="animation-delay:.1s"/>
+    <circle class="pop" cx="50" cy="50" r="6" fill="#0A1220" style="animation-delay:.3s"/>
+  </svg>
+  <h1>PerTurbo</h1>
+  <div class="tg">in-silico perturbation · real targets</div>
+  <div class="amd"><span class="beat"></span><span class="hx">⬡</span> running live on AMD Instinct MI300X</div>
+  <div class="enterhint"><span class="sc">⌄</span> scroll or click to enter</div>
+</div>
+
+<div class="app" id="app">
+  <div class="topctl" id="topctl">
+    <div class="pill" id="statuspill" title="Endpoint status — click to configure">
+      <span id="pmode">connecting…</span><span class="psep">·</span><span class="plabel">kimi-k2 · AMD Instinct MI300X</span>
+    </div>
+    <button class="tcbtn" id="exportbtn" title="Export results">⤓ Export</button>
+    <button class="tcbtn" id="creditsbtn" title="About & credits">ⓘ Credits</button>
+    <label class="mswitch" title="Light / dark mode" aria-label="Toggle light or dark mode">
+      <input type="checkbox" id="modetoggle">
+      <span class="mtrack"><span class="mknob"></span></span>
+    </label>
+  </div>
+  <aside class="agent">
+    <div class="brand">
+      <svg viewBox="0 0 100 100"><g stroke-width="3.5" fill="none">
+        <line x1="50" y1="50" x2="82" y2="26" stroke="#EF8F6E"/><line x1="50" y1="50" x2="86" y2="58" stroke="#5BB3A6"/>
+        <line x1="50" y1="50" x2="64" y2="86" stroke="#EF8F6E"/><line x1="50" y1="50" x2="18" y2="70" stroke="#5BB3A6"/>
+        <line x1="50" y1="50" x2="24" y2="30" stroke="#EF8F6E"/></g>
+        <circle cx="82" cy="26" r="6" fill="#DBAE5F"/><circle cx="86" cy="58" r="5" fill="#84B6AB"/>
+        <circle cx="64" cy="86" r="5" fill="#C98AC0"/><circle cx="18" cy="70" r="5" fill="#84B6AB"/>
+        <circle cx="24" cy="30" r="5" fill="#C98AC0"/>
+        <circle cx="50" cy="50" r="15" fill="#E6A85C"/><circle cx="50" cy="50" r="6" fill="var(--panel)"/></svg>
+      <div><h1>PerTurbo</h1><div class="tg">spatial target discovery</div></div>
+    </div>
+    <div class="stream" id="stream">
+      <div class="msg bot"><div class="who">PerTurbo</div><div class="bubble">I read spatial tumour data and predict which cell populations — and which genes within them — drive the cancer. Ask me to <strong>find targets</strong> in a sample, <strong>evaluate</strong> genes you're considering, or <strong>compare</strong> primary vs metastasis.</div></div>
+    </div>
+    <div class="composer">
+      <div class="chips" id="chips">
+        <div class="chip" data-q="What should I target in the liver metastasis? Show me the top populations.">Find targets · metastasis</div>
+        <div class="chip" data-q="What should I target in the primary tumour?">Find targets · primary</div>
+        <div class="chip" data-q="Evaluate CCN2, EGFR, BGN and SPARC as targets in the metastasis">Evaluate my genes</div>
+        <div class="chip" data-q="How does myCAF compare between the primary tumour and the metastasis?">Compare primary vs met</div>
+        <div class="chip" data-q="Is CCN2 druggable? What's known about it in the databases?">Known biology · CCN2</div>
+      </div>
+      <div class="inbox">
+        <input id="q" placeholder="Ask PerTurbo…" autocomplete="off">
+        <button id="send">Ask</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="resizer" id="resizer" title="Drag to resize the chat panel"></div>
+
+  <main class="stage tabs" id="stage">
+    <div class="stage-head" id="shead">
+      <div class="stitle-wrap"><div class="k" id="sk">Analysis</div><h2 id="stitle">Ready</h2></div>
+    </div>
+    <div id="body">
+      <div id="histbar" class="hide"></div>
+      <div id="history">
+        <div class="empty">
+          <svg width="80" height="80" viewBox="0 0 100 100"><g stroke="#2A3A55" stroke-width="3" fill="none">
+            <line x1="50" y1="50" x2="80" y2="28"/><line x1="50" y1="50" x2="84" y2="60"/><line x1="50" y1="50" x2="24" y2="70"/></g>
+            <circle cx="80" cy="28" r="5" fill="#2A3A55"/><circle cx="84" cy="60" r="4" fill="#2A3A55"/>
+            <circle cx="24" cy="70" r="4" fill="#2A3A55"/><circle cx="50" cy="50" r="12" fill="none" stroke="#2A3A55" stroke-width="3"/></svg>
+          <div class="eb">The workspace is quiet.</div>
+          <p>Ask PerTurbo a question and it will present its findings here — ranked targets, gene-level detail, spatial maps, and cross-sample comparisons. Each analysis is kept so a new question never erases the last.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="lb"><div class="wrap"><button class="close" onclick="closeLb(event)">✕</button>
+  <img id="lbimg" src=""><div class="lbcap"><b id="lbtitle"></b><span id="lbsub"></span></div>
+  <div class="lbhint">scroll to zoom · drag to pan · click outside to close</div></div></div>
+
+<div id="cfg" class="cfg-back">
+  <div class="cfg">
+    <button class="close" onclick="closeCfg()">✕</button>
+    <h4>Agent endpoint</h4>
+    <p>URL of the Perturbo agent server. If it's unreachable, the dashboard automatically plays a built-in saved analysis so a demo never breaks.</p>
+    <label for="cfgurl">Server URL</label>
+    <input type="text" id="cfgurl" spellcheck="false" autocomplete="off" placeholder="https://…/proxy/8000">
+    <label class="cfgtoggle"><input type="checkbox" id="cfgdemo">
+      <span>Force demo mode<small>Play only the built-in saved analysis — never touches the network. Safest for a live demo.</small></span></label>
+    <div class="cfgbtns">
+      <button class="ghost" id="cfgtest">Test connection</button>
+      <button class="prim" id="cfgsave">Save &amp; reconnect</button>
+    </div>
+    <div class="cfgmsg" id="cfgmsg"></div>
+  </div>
+</div>
+
+<div id="cred" class="cfg-back">
+  <div class="cfg credits">
+    <button class="close" onclick="closeCred()">✕</button>
+    <h4>PerTurbo</h4>
+    <p>Spatial-transcriptomics target discovery for pancreatic cancer (PDAC) — an LLM agent that reads real Celcomen gene–gene couplings and presents predicted, causal-given-model hypotheses. AMD Developer Hackathon · Track 3.</p>
+    <h5>Team</h5>
+    <div class="cgrid" id="cteam"></div>
+    <h5>Method &amp; infrastructure</h5>
+    <div class="cstack">
+      <div class="row"><span class="k">Engine</span><span>Extended <b>Celcomen</b> — signed/sparse gene–gene couplings over matched Visium sections</span></div>
+      <div class="row"><span class="k">Data</span><span>Primary (T11) + liver-metastasis (HM11), one patient · <b>GSE272362</b>, Khaliq et al.</span></div>
+      <div class="row"><span class="k">Agent LLM</span><span><b>kimi-k2</b> — runs on <b>AMD Instinct MI300X</b> (Fireworks now; deployable via vLLM)</span></div>
+      <div class="row"><span class="k">Framing</span><span>All results are <b>predicted hypotheses</b> requiring experimental validation — never proven targets</span></div>
+    </div>
+  </div>
+</div>
+
+<div id="exp" class="cfg-back">
+  <div class="cfg export">
+    <button class="close" onclick="closeExport()">✕</button>
+    <h4>Export results</h4>
+    <p>A complete, thorough report of <b>every</b> analysis this session — findings, tables, the comparison plot, spatial maps, the coupling network and the agent's own answers.</p>
+    <div class="expgrid">
+      <button class="expcard wide" data-fmt="html"><span class="ei">🧬</span><b>Full HTML report</b><small>Self-contained, interactive-looking web report (like a FastQC report) — open or share in any browser</small></button>
+      <button class="expcard wide" data-fmt="pdf"><span class="ei">🖨️</span><b>PDF report</b><small>The exact same report, print-ready → choose “Save as PDF” — for a PI or investor</small></button>
+    </div>
+    <div class="cfgmsg" id="expmsg"></div>
+  </div>
+</div>
+
+<div id="gtip"></div>
+<div id="toast"></div>
+
+<script src="data.js"></script>
+<script src="app.js" defer></script>
+</body>
+</html>
