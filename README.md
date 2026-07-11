@@ -106,9 +106,7 @@ Fireworks AI API
 
 ## Team
 
-Evangelia Kourtzeli, model development, extending Celcomen to signed and sparse spatial couplings, the effect scoring, and the network export
-Ioulios Konstantelos, backend and agent, the Flask API, kimi-k2 orchestration, live endpoints, and the knowledge service
-Panagiotis Lazanas, frontend and product, the dashboard, choreography, network, maps, evidence panels, and reports
+Evangelia Kourtzelli, Ioulios Konstantelos, Panagiotis Lazanas.
 
 MSc Data Science and Information Technologies
 National and Kapodistrian University of Athens
