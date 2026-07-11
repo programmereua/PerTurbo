@@ -56,7 +56,7 @@ The notebooks in the root directory are the validated scientific analysis behind
 
 `Celcomen_Methodology_Models_FINAL.ipynb` characterises capacity, generalisation, and identifiability across four model variants, the original Celcomen coupling, a graph attention autoencoder, a constrained GGAT, and a doubly stochastic attention extension, using a spatial block validation split to remove message passing leakage between training and held out regions.
 
-`Causal_Directions_FAST_reliable.ipynb` runs the causal direction engine, bootstrap resampled FCI with FDR correction and OmniPath and KEGG pathway priors, that powers the live agent's confidence graded verdicts.
+`Causal_Directions.ipynb` runs the causal direction engine, bootstrap resampled FCI with FDR correction and OmniPath and KEGG pathway priors, that powers the live agent's confidence graded verdicts.
 
 To run a notebook, open it in Jupyter Notebook, JupyterLab, or upload it to Google Colab, install the dependencies listed in the Environment section below, and run the cells in order from top to bottom. Each notebook is self contained and states its own assumptions and honest limitations inline.
 
