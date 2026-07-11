@@ -4,6 +4,7 @@ An agentic AI tool for in silico gene perturbation across diseases, powered by s
 
 Built for the AMD Developer Hackathon Act II, Track 3 (Unicorn).
 
+
 ## The product
 
 PerTurbo turns a spatial transcriptomics model into something a biologist can actually interrogate. You ask a question in plain language, for example what should I target in the liver metastasis, and the agent answers by ranking cell populations, pulling up the genes that drive them, mapping where the effect lands in the tissue, drawing the coupling network, and showing what public databases already know about each candidate. Every answer plays out as a short, narrated sequence, so a researcher watches the reasoning instead of reading a wall of text or a bare gene list.
