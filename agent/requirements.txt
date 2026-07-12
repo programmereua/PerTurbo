@@ -1,0 +1,4 @@
+flask>=3.0
+openai>=1.30
+# gene_knowledge.py uses only the Python stdlib (urllib) — no extra deps.
+# NOTE: this directory contains NO Celcomen code. MIT-licensed.
