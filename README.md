@@ -51,21 +51,24 @@ The precompute pipeline trains the coupling model and runs the counterfactual kn
 The repository separates the offline science from the runtime product. This split is also the licensing boundary (see the Celcomen licence section below).
 
 ```
-notebooks/            Validated scientific analysis (Jupyter / Colab). Uses Celcomen (GPL-3.0).
-  Celcomen_Experiments_and_Validation.ipynb
-  Celcomen_Methodology_Models.ipynb
-causal_directions.py  Causal direction engine (bootstrap FCI + FDR + OmniPath/KEGG priors). Uses GPL deps.
-precompute/           Offline pipeline that generates the artifacts the agent serves. Uses Celcomen (GPL-3.0).
-  perturbo_precompute_fast.py    ranks populations, drills gene targets, saves spatial maps
-  perturbo_network_export.py     exports the coupling networks (undirected couplings + directed priors)
-agent/                The runtime product. Contains NO Celcomen code — MIT-licensed.
+agent/                  The runtime product. Contains NO Celcomen code — MIT-licensed.
   perturbo_agent_api.py          Flask API: brain + LLM tool loop + presentation-script builder
   gene_knowledge.py              live external-evidence lookup (stdlib only)
-data/  maps/          Artifacts the precompute produces and the agent consumes (JSON + PNGs).
+  requirements.txt               flask, openai
+backend_precompute/     Offline pipeline that generates the artifacts the agent serves. Uses Celcomen (GPL-3.0).
+  perturbo_precompute_fast.py    ranks populations, drills gene targets, saves spatial maps
+  perturbo_network_export.py     exports the coupling networks (undirected couplings + directed priors)
+experiments_validation/ Validated scientific analysis (Jupyter / Colab) + the causal engine. Uses Celcomen (GPL-3.0).
+  Celcomen_Experiments_and_Validation.ipynb
+  Celcomen_Methodology_Models.ipynb
+  causal_directions.py           causal direction engine (bootstrap FCI + FDR + OmniPath/KEGG priors)
+LICENSE
+README.md
 ```
 
-The `agent/` server imports no Celcomen code; it reads the JSON artifacts and serves them. The `precompute/`
-pipeline and the notebooks use Celcomen as an installed dependency to produce those artifacts.
+The `agent/` server imports no Celcomen code; it reads the JSON artifacts and serves them. The
+`backend_precompute/` pipeline and the notebooks in `experiments_validation/` use Celcomen as an installed
+dependency to produce those artifacts.
 
 ## Running it
 
@@ -77,7 +80,7 @@ pip install -r requirements.txt
 export PERTURBO_LLM_API_KEY=...            # your Fireworks key (or any OpenAI-compatible endpoint)
 export PERTURBO_LLM_BASE_URL=https://api.fireworks.ai/inference/v1
 export PERTURBO_LLM_MODEL=accounts/fireworks/models/kimi-k2p6
-export PERTURBO_DATA=../data/perturbo_data.json
+export PERTURBO_DATA=perturbo_data.json    # path to the precomputed artifact (see step 2)
 python perturbo_agent_api.py --port 8000
 ```
 
@@ -101,17 +104,20 @@ To serve the dashboard from the same origin (avoiding CORS entirely), add `--sta
 ### 2. The precompute (offline, requires the Celcomen/GPL environment + spatial data)
 
 ```bash
-cd precompute
+cd backend_precompute
 pip install -r requirements.txt
 python perturbo_precompute_fast.py --steps 80      # ranked targets + spatial maps (one-time, heavy)
 python perturbo_network_export.py --from-model     # coupling networks + sign concordance
-# move perturbo_data.json, network.json, maps/*.png into ../data and ../maps
 ```
+
+This writes `perturbo_data.json`, `network.json`, and the spatial-effect PNGs; point the agent at them with
+`PERTURBO_DATA` (and place the PNGs where the agent's `/map` endpoint can find them).
 
 ### 3. The notebooks (reproduce the science)
 
-Open in Jupyter, JupyterLab, or Google Colab and run top to bottom. Each is self contained and states its own
-assumptions and honest limitations inline.
+The `experiments_validation/` notebooks are the validated analysis behind the tool. Open in Jupyter,
+JupyterLab, or Google Colab and run top to bottom. Each is self contained and states its own assumptions and
+honest limitations inline.
 
 `Celcomen_Experiments_and_Validation.ipynb` trains Celcomen on two matched pancreatic ductal adenocarcinoma sections, one primary tumour and one liver metastasis, applies Simcomen counterfactual knockouts, and validates the results against a battery of noise controls including bootstrap seeds, permutation nulls, and shuffled graph controls.
 
@@ -151,7 +157,7 @@ The data is one PDAC patient, a primary tumour labelled T11 and a liver metastas
 
 PerTurbo's causal engine is built directly on Celcomen (Megas, Chen, Polanski, Asadollahzadeh, Eliasof, Schönlieb, Teichmann, Wellcome Sanger Institute and University of Cambridge), published in Nature Communications. We use both its inference module, CCE, to learn the signed gene gene coupling, and its generative counterfactual module, SCE or Simcomen, to simulate perturbations.
 
-Celcomen is distributed under the GPL-3.0 licence. We use it as intended, as an installed dependency, not by copying or modifying its source into this repository, and we credit it explicitly here and in every notebook. The `precompute/` pipeline and the notebooks depend on Celcomen and therefore run in a GPL environment. The `agent/` server contains no Celcomen code (verified: no Celcomen import anywhere under `agent/`) and, together with the code in this repository that does not derive from Celcomen, is released under the MIT License, matching the frontend repository; see LICENSE.
+Celcomen is distributed under the GPL-3.0 licence. We use it as intended, as an installed dependency, not by copying or modifying its source into this repository, and we credit it explicitly here and in every notebook. The `backend_precompute/` pipeline and the notebooks in `experiments_validation/` depend on Celcomen and therefore run in a GPL environment. The `agent/` server contains no Celcomen code (verified: no Celcomen import anywhere under `agent/`) and, together with the code in this repository that does not derive from Celcomen, is released under the MIT License, matching the frontend repository; see LICENSE.
 
 ## Environment
 
@@ -161,7 +167,7 @@ Python 3.11
 # agent/ (runtime, MIT) — no Celcomen
 flask, openai
 
-# precompute/ and notebooks/ — use Celcomen (GPL-3.0)
+# backend_precompute/ and experiments_validation/ — use Celcomen (GPL-3.0)
 celcomen, simcomen (Teichmann lab, GPL-3.0)
 scanpy, anndata, torch, torch-geometric
 causal-learn, statsmodels, omnipath
