@@ -115,15 +115,108 @@ This writes `perturbo_data.json`, `network.json`, and the spatial-effect PNGs; p
 
 ### 3. The notebooks (reproduce the science)
 
-The `experiments_validation/` notebooks are the validated analysis behind the tool. Open in Jupyter,
-JupyterLab, or Google Colab and run top to bottom. Each is self contained and states its own assumptions and
-honest limitations inline.
+The three scripts, in the order you run them
 
-`Celcomen_Experiments_and_Validation.ipynb` trains Celcomen on two matched pancreatic ductal adenocarcinoma sections, one primary tumour and one liver metastasis, applies Simcomen counterfactual knockouts, and validates the results against a battery of noise controls including bootstrap seeds, permutation nulls, and shuffled graph controls.
+1.perturbo_causality.py — interventional evidence (Simcomen)
 
-`Celcomen_Methodology_Models.ipynb` characterises capacity, generalisation, and identifiability across four model variants, the original Celcomen coupling, a graph attention autoencoder, a constrained GGAT, and a doubly stochastic attention extension, using a spatial block validation split to remove message passing leakage between training and held out regions.
+What it does: trains a Celcomen coupling model on each tissue section, then actually
+knocks out each driver gene inside each Cell Community (CC) — setting its expression to zero,
+letting the model relax, and reading how much the tumour-gene readout moves. This is repeated for
+every driver gene individually and for each CC as a group, then checked against a permutation null
+(random gene knockouts) with FDR correction, so every effect comes with a p-value and q-value.
 
-`causal_directions.py` runs the causal direction engine, bootstrap resampled FCI with FDR correction and OmniPath and KEGG pathway priors, that powers the live agent's confidence graded verdicts.
+Why this method: it is a real intervention (do(gene = 0)), not a correlation. It answers
+"if I silence this gene, what happens to the tumour?" — the actual causal question a
+wet-lab experiment would ask, simulated on the trained model.
+
+What it can get wrong: everything it says is only as good as the trained coupling W. If the
+model learned the wrong structure, or the true signal is confounded, Simcomen has no way to know
+— it trusts the model completely and reports the model's prediction as fact.
+
+Run it:
+
+python 1.perturbo_causality.py
+
+Writes perturbo_out/perturbo_data.json. Slow (trains a model + hundreds of knockouts per
+section), but resumable — it saves after each section and skips ones already done if you rerun it.
+
+
+2.fci_causal_discovery.py — observational evidence (FCI)
+
+What it does: takes the raw expression data — no trained model, no intervention — and asks,
+for every stroma–tumour gene pair, whether their association survives after statistically
+controlling for every other gene in the panel. If the association disappears once you account for
+a third gene, that third gene likely explains it (a shared cause). If it survives no matter what
+you control for, FCI treats it as a real, directed edge. This is bootstrapped (15 resamples) so
+every verdict — directed edge, shared latent factor, or undetermined — comes with a stability
+score, and it's cross-checked with a second, non-linear test (RCIT) since the expression data is
+skewed.
+
+Why this method: it does not trust the trained model at all. It starts from scratch, from the
+data itself, so it can catch cases where Simcomen's prediction is actually driven by a hidden
+confounder (like the tumour niche) rather than a real gene-to-gene effect — something Simcomen has
+no way to detect on its own.
+
+What it can get wrong: needs enough samples and a clean enough signal to detect an effect;
+at Visium spot resolution (many cells per spot), a real but modest effect can fail to reach
+significance even when it's genuine.
+
+Run it:
+
+python 2.fci_causal_discovery.py
+
+Writes causal_results/causal_directions_HM11.csv and _T11.csv. The first several bootstrap
+runs are slow while the worker pool warms up (normal, not a bug) — the script does not need to be
+stopped or restarted for this.
+
+
+3.merge_causality_evidence.py — combining the two, honestly
+
+What it does: reads both output files and, for every gene Simcomen tested, looks up what FCI
+independently found for that gene. It never averages the two into one score. Instead it labels
+each gene with a provenance-tagged status:
+
+statusmeaningcorroboratedSimcomen KO is significant and FCI finds a stable directed edge — the strongest possible callsimcomen_onlyModel predicts an effect, but FCI can't confirm it observationally (common at spot resolution)flag_latentFCI says this pair is explained by a shared hidden factor (the niche) — treat the Simcomen prediction with cautionfci_onlyFCI finds a directed edge, but the Simcomen knockout wasn't significantweakneither method is confidentfci_not_evaluatedgene is outside the FCI gene panel
+
+Why we do this at all: The two methods fail in different ways (one trusts the model
+completely, the other needs a clean statistical signal), so when they agree, that agreement is
+real evidence — not the same mistake made twice. When they disagree, the disagreement itself is
+useful: it tells you exactly which "significant" model predictions should not be taken at face
+value.
+
+Run it:
+
+python 3.merge_causality_evidence.py
+
+Writes perturbo_out/perturbo_merged.json (what the app/agent should read) and
+perturbo_out/merged_evidence.csv (a flat audit table, sorted so corroborated hits are on top).
+
+
+Run order
+
+python 1.perturbo_causality.py        # interventional: train + knock out every driver gene
+python 2.fci_causal_discovery.py      # observational: independent check from raw data
+python 3.merge_causality_evidence.py  # combine both, with honest provenance labels
+
+Steps 1 and 2 are independent of each other and could in principle run in parallel — step 3 needs
+the output of both.
+
+The two notebooks
+
+experiments_validation.ipynb — the main biological analysis and validation battery:
+trains the identifiable signed-sparse Celcomen model, runs the knockout experiments, and stress
+tests every design choice (permutation nulls, seed stability, control audits) against what could
+go wrong. This is where the honest, section-by-section reasoning behind the biology lives.
+
+
+Celcomen_Methodology_Models.ipynb — characterises the models themselves: capacity,
+generalisation, and whether the attention-based extensions (GAT, GGAT, doubly-stochastic
+attention) preserve the identifiability guarantee that makes the whole pipeline trustworthy.
+Uses leakage-free spatial validation splits so the reported metrics are real, not optimistic.
+
+
+These are the scientific backbone; the three numbered scripts are the productionised pipeline
+built on top of them.
 
 ## Not only for one disease, a rich, swappable environment
 
