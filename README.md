@@ -27,7 +27,7 @@ Try it live: https://plazanas.github.io/PerTurbo-Dashboard/
 
 Frontend source code: https://github.com/plazanas/PerTurbo-Dashboard
 
-This repository holds the scientific backbone, the causal engine, and the notebooks the dashboard is built on.
+This repository holds the scientific backbone, the causal engine, the precompute pipeline, and the agent API the dashboard talks to.
 
 ## How the pieces connect
 
@@ -41,24 +41,83 @@ flowchart LR
   P[("OmniPath and KEGG<br/>pathway priors")] --> V
   V["Confidence graded verdict<br/>high, medium, or low"] --> A
   E --> A
-  A["Flask agent API<br/>kimi-k2 on AMD Instinct MI300X"] --> UI["Dashboard<br/>GitHub Pages"]
+  A["Flask agent API<br/>kimi-k2 via Fireworks, run on AMD Developer Cloud"] --> UI["Dashboard<br/>GitHub Pages"]
 ```
 
-The trained coupling and the causal direction engine in this repository are what the agent API queries. The agent itself, its choreography of the dashboard, and the live interface are documented in the frontend repository linked above.
+The precompute pipeline trains the coupling model and runs the counterfactual knockouts and the causal direction engine offline, writing compact artifacts. The agent API serves those artifacts and wraps them in the LLM layer. The agent itself, its choreography of the dashboard, and the live interface are in the frontend repository linked above.
 
-## Repository contents and usage
+## Repository structure
 
-This repository is organized into two parts.
+The repository separates the offline science from the runtime product. This split is also the licensing boundary (see the Celcomen licence section below).
 
-The notebooks in the root directory are the validated scientific analysis behind the tool. Open them in Jupyter or Google Colab to reproduce the results.
+```
+notebooks/            Validated scientific analysis (Jupyter / Colab). Uses Celcomen (GPL-3.0).
+  Celcomen_Experiments_and_Validation.ipynb
+  Celcomen_Methodology_Models.ipynb
+causal_directions.py  Causal direction engine (bootstrap FCI + FDR + OmniPath/KEGG priors). Uses GPL deps.
+precompute/           Offline pipeline that generates the artifacts the agent serves. Uses Celcomen (GPL-3.0).
+  perturbo_precompute_fast.py    ranks populations, drills gene targets, saves spatial maps
+  perturbo_network_export.py     exports the coupling networks (undirected couplings + directed priors)
+agent/                The runtime product. Contains NO Celcomen code — MIT-licensed.
+  perturbo_agent_api.py          Flask API: brain + LLM tool loop + presentation-script builder
+  gene_knowledge.py              live external-evidence lookup (stdlib only)
+data/  maps/          Artifacts the precompute produces and the agent consumes (JSON + PNGs).
+```
+
+The `agent/` server imports no Celcomen code; it reads the JSON artifacts and serves them. The `precompute/`
+pipeline and the notebooks use Celcomen as an installed dependency to produce those artifacts.
+
+## Running it
+
+### 1. The agent API (runtime, MIT, Celcomen-free)
+
+```bash
+cd agent
+pip install -r requirements.txt
+export PERTURBO_LLM_API_KEY=...            # your Fireworks key (or any OpenAI-compatible endpoint)
+export PERTURBO_LLM_BASE_URL=https://api.fireworks.ai/inference/v1
+export PERTURBO_LLM_MODEL=accounts/fireworks/models/kimi-k2p6
+export PERTURBO_DATA=../data/perturbo_data.json
+python perturbo_agent_api.py --port 8000
+```
+
+The server binds `0.0.0.0:8000` and starts immediately, because it reads precomputed artifacts rather than
+training anything. Without an LLM key, the data endpoints still work and `/chat` returns a graceful message.
+To serve the dashboard from the same origin (avoiding CORS entirely), add `--static /path/to/dashboard`.
+
+**Endpoints** (CORS enabled, OPTIONS preflight answered, `/chat` never crashes):
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET  | `/health` | `{ ok, has_llm, sections }` |
+| GET  | `/sections` | available samples |
+| GET  | `/network` | coupling networks JSON |
+| GET  | `/map?section=&population=` | spatial-effect PNG |
+| POST | `/discover` | `{ section, n }` → ranked targets |
+| POST | `/evaluate` | `{ genes, section }` → prioritise / consider / deprioritise |
+| POST | `/chat` | `{ message, history }` → `{ reply, script, history }` |
+| POST | `/knowledge` | `{ gene, disease }` → grounded external-evidence dossier |
+
+### 2. The precompute (offline, requires the Celcomen/GPL environment + spatial data)
+
+```bash
+cd precompute
+pip install -r requirements.txt
+python perturbo_precompute_fast.py --steps 80      # ranked targets + spatial maps (one-time, heavy)
+python perturbo_network_export.py --from-model     # coupling networks + sign concordance
+# move perturbo_data.json, network.json, maps/*.png into ../data and ../maps
+```
+
+### 3. The notebooks (reproduce the science)
+
+Open in Jupyter, JupyterLab, or Google Colab and run top to bottom. Each is self contained and states its own
+assumptions and honest limitations inline.
 
 `Celcomen_Experiments_and_Validation.ipynb` trains Celcomen on two matched pancreatic ductal adenocarcinoma sections, one primary tumour and one liver metastasis, applies Simcomen counterfactual knockouts, and validates the results against a battery of noise controls including bootstrap seeds, permutation nulls, and shuffled graph controls.
 
-`Celcomen_Methodology_Models_FINAL.ipynb` characterises capacity, generalisation, and identifiability across four model variants, the original Celcomen coupling, a graph attention autoencoder, a constrained GGAT, and a doubly stochastic attention extension, using a spatial block validation split to remove message passing leakage between training and held out regions.
+`Celcomen_Methodology_Models.ipynb` characterises capacity, generalisation, and identifiability across four model variants, the original Celcomen coupling, a graph attention autoencoder, a constrained GGAT, and a doubly stochastic attention extension, using a spatial block validation split to remove message passing leakage between training and held out regions.
 
-`Causal_Directions.py` runs the causal direction engine, bootstrap resampled FCI with FDR correction and OmniPath and KEGG pathway priors, that powers the live agent's confidence graded verdicts.
-
-To run a notebook, open it in Jupyter Notebook, JupyterLab, or upload it to Google Colab, install the dependencies listed in the Environment section below, and run the cells in order from top to bottom. Each notebook is self contained and states its own assumptions and honest limitations inline.
+`causal_directions.py` runs the causal direction engine, bootstrap resampled FCI with FDR correction and OmniPath and KEGG pathway priors, that powers the live agent's confidence graded verdicts.
 
 ## Not only for one disease, a rich, swappable environment
 
@@ -82,7 +141,7 @@ The signed stroma to tumour cross block is consistently negative and reproducibl
 
 ## Tech stack
 
-The model is Celcomen, extended in this repository for signed and sparse gene to gene couplings over matched 10x Visium sections. The agent is a Flask API orchestrating kimi-k2, running on AMD Instinct MI300X and served through Fireworks, with vLLM as a deployment path. The frontend is a static site in vanilla JavaScript with Chart.js for charts and html2canvas for image export, with no build step. External evidence is pulled live from Open Targets, DGIdb, Europe PMC, and ClinicalTrials.gov.
+The model is Celcomen, extended in this repository for signed and sparse gene to gene couplings over matched 10x Visium sections. The agent is a Flask API orchestrating kimi-k2 through the Fireworks API, and the full agent was run inside the AMD Developer Cloud notebook environment; self hosting the model on AMD Instinct MI300X via vLLM is a supported deployment path. The frontend is a static site in vanilla JavaScript with Chart.js for charts and html2canvas for image export, with no build step. External evidence is pulled live from Open Targets, DGIdb, Europe PMC, and ClinicalTrials.gov.
 
 ## Data and method
 
@@ -92,15 +151,22 @@ The data is one PDAC patient, a primary tumour labelled T11 and a liver metastas
 
 PerTurbo's causal engine is built directly on Celcomen (Megas, Chen, Polanski, Asadollahzadeh, Eliasof, Schönlieb, Teichmann, Wellcome Sanger Institute and University of Cambridge), published in Nature Communications. We use both its inference module, CCE, to learn the signed gene gene coupling, and its generative counterfactual module, SCE or Simcomen, to simulate perturbations.
 
-Celcomen is distributed under the GPL-3.0 licence. We use it as intended, as an installed dependency, not by copying or modifying its source into this repository, and we credit it explicitly here and in every notebook. The code in this repository that does not derive from Celcomen is released under the MIT License, matching the frontend repository; see LICENSE.
+Celcomen is distributed under the GPL-3.0 licence. We use it as intended, as an installed dependency, not by copying or modifying its source into this repository, and we credit it explicitly here and in every notebook. The `precompute/` pipeline and the notebooks depend on Celcomen and therefore run in a GPL environment. The `agent/` server contains no Celcomen code (verified: no Celcomen import anywhere under `agent/`) and, together with the code in this repository that does not derive from Celcomen, is released under the MIT License, matching the frontend repository; see LICENSE.
 
 ## Environment
 
 ```
 Python 3.11
+
+# agent/ (runtime, MIT) — no Celcomen
+flask, openai
+
+# precompute/ and notebooks/ — use Celcomen (GPL-3.0)
 celcomen, simcomen (Teichmann lab, GPL-3.0)
 scanpy, anndata, torch, torch-geometric
 causal-learn, statsmodels, omnipath
+
+# LLM
 Fireworks AI API
 ```
 
