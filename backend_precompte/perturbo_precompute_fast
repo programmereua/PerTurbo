@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""
+perturbo_precompute_fast.py  ---  FAST precompute for BOTH agent modes
+======================================================================
+Produces one JSON that serves:
+  * DISCOVER  (exploration): ranked populations -> target genes -> hub/effect/map
+  * EVALUATE  (ready targets): a gene-effect LOOKUP TABLE the agent queries for any gene
+
+Key design for BOTH modes from ONE computation:
+  - We knock out each driver gene once (in its population's spots) -> per-gene effect.
+  - DISCOVER ranks those; EVALUATE looks them up. No redundant compute.
+
+Speed levers (vs the slow version):
+  - RELAX_STEPS reduced (ranking needs relative effects, not full precision) -- BIGGEST win
+  - tumour-UNIQUE drivers only (mechanistic fix) + exclude self-signal populations
+  - population ranking = 1 relax/pop; gene table = 1 relax/gene (top pops only)
+  - --fast flag: ranking + gene table, SKIP maps (fastest, for iterating)
+  - resume/save-as-you-go (crash + laptop-close proof)
+
+Run (on desktop, celcomen env):
+  nohup python perturbo_precompute_fast.py > pc_log.txt 2>&1 &     # full
+  python perturbo_precompute_fast.py --fast                       # no maps, fastest
+  python perturbo_precompute_fast.py --steps 30                   # tune relax steps
+"""
+import os, json, tempfile, warnings, argparse, time
+import numpy as np, pandas as pd, scanpy as sc, torch
+import matplotlib; matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+from sklearn.neighbors import kneighbors_graph
+from scipy.sparse import csr_matrix, issparse
+warnings.filterwarnings("ignore")
+
+from celcomen.models.celcomen import celcomen
+from celcomen.models.simcomen import simcomen
+from celcomen.datareaders.datareader import get_dataset_loaders
+from celcomen.utils.helpers import normalize_g2g, calc_sphex
+import celcomen.training_plan.train as T
+
+# ---------------- config ----------------
+SECTIONS = {
+    "HM11": ("handoff_to_eva/data/IU_PDA_HM11.h5ad",
+             "handoff_to_eva/drivers/IU_PDA_HM11_drivers_per_celltype.csv", "liver metastasis"),
+    "T11":  ("handoff_to_eva/data/IU_PDA_T11.h5ad",
+             "handoff_to_eva/drivers/IU_PDA_T11_drivers_per_celltype.csv",  "primary tumour"),
+}
+CELLTYPE_COL, THEME_COL, SAMPLE_ID = "first_type", "theme", "sample_id"
+TUMOUR_THEMES = {"tumour/metabolic", "tumour_metabolic", "tumour", "tumor"}
+K, SEED, CC_EPOCHS, CC_LR, ZMFT, TOP = 6, 0, 200, 1e-1, 1e-1, 10
+THRESHOLD = 0.15
+TOP_DRILL = 3                 # populations to fully drill (per-gene + map)
+EXCLUDE = {"Tumor Epithelial cells", "Tumour Epithelial cells"}   # self-signal
+OUTDIR = "perturbo_out"; MAPDIR = f"{OUTDIR}/maps"
+os.makedirs(MAPDIR, exist_ok=True)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+_orig = normalize_g2g
+
+# ---------------- validated machinery ----------------
+def normalize_g2g_sparse_signed(g):
+    g = (g + g.T) / 2; g[g < -1] = -1; g[g > 1] = 1
+    absg = g.abs() if hasattr(g, "abs") else np.abs(g)
+    g[absg < THRESHOLD] = 0
+    for i in range(len(g)): g[i, i] = 1
+    return g
+
+def prep(path):
+    a = sc.read_h5ad(path)
+    if SAMPLE_ID not in a.obs: a.obs[SAMPLE_ID] = "0"
+    sc.pp.normalize_total(a, target_sum=1e6); sc.pp.log1p(a)
+    if not issparse(a.X): a.X = csr_matrix(a.X)
+    tmp = tempfile.NamedTemporaryFile(suffix=".h5ad", delete=False).name; a.write(tmp)
+    return tmp, a
+
+def unit_norm(a):
+    X = a.X.toarray() if hasattr(a.X, "toarray") else np.asarray(a.X)
+    X = X.astype("float32"); nf = np.sqrt((X**2).sum(1, keepdims=True)); nf[nf == 0] = 1
+    return X / nf
+
+def knockout(expr, genes, rows):
+    e = expr.copy(); e[np.ix_(rows, genes)] = 0.0
+    nf = np.sqrt((e**2).sum(1, keepdims=True)); nf[nf == 0] = 1
+    return e / nf
+
+def edges_of(coords):
+    g = kneighbors_graph(coords, K, include_self=False).toarray()
+    return torch.from_numpy(np.array(np.where(g == 1))).long()
+
+def init_sparse(n):
+    m = np.random.RandomState(SEED).uniform(-1, 1, size=(n, n)).astype("float32")
+    return torch.from_numpy(normalize_g2g_sparse_signed((m + m.T) / 2))
+
+def train_sparse(loader, n):
+    T.normalize_g2g = normalize_g2g_sparse_signed
+    m = celcomen(input_dim=n, output_dim=n, n_neighbors=K, seed=SEED)
+    m.set_g2g(init_sparse(n)); m.set_g2g_intra(init_sparse(n)); m.to(device)
+    T.train(CC_EPOCHS, CC_LR, m, loader, zmft_scalar=ZMFT, seed=SEED, device=device)
+    T.normalize_g2g = _orig
+    return m
+
+def make_relax(steps):
+    """relax with a configurable number of SCM steps (fewer = faster; ranking is robust to this)."""
+    def relax(model, expr_pert, edges, n):
+        scm = simcomen(input_dim=n, output_dim=n, n_neighbors=K, seed=SEED)
+        scm.set_g2g(model.conv1.lin.weight.clone().detach())
+        scm.set_g2g_intra(model.lin.weight.clone().detach()); scm.to(device)
+        scm.set_sphex(torch.nan_to_num(calc_sphex(torch.from_numpy(expr_pert))).float().to(device))
+        opt = torch.optim.SGD(scm.parameters(), lr=1e-3, momentum=0)
+        for _ in range(steps):
+            msg, mi, lz = scm(edges.to(device), 1)
+            loss = -(-lz + ZMFT*torch.trace(torch.mm(msg, scm.gex.t()))
+                     + ZMFT*torch.trace(torch.mm(mi, scm.gex.t())))
+            loss.backward(); opt.step(); opt.zero_grad()
+        return scm.gex.detach().cpu().numpy()
+    return relax
+
+# curated directed pathway edges (source -> target). DIRECTION only, from literature/OmniPath/KEGG.
+# Used to compute directed out-degree ('upstream-ness'). Direction is IMPORTED, not learned.
+ALIASES = {"CYR61":"CCN1","CTGF":"CCN2","NOV":"CCN3","WISP1":"CCN4","WISP2":"CCN5"}
+def _canon(g): return ALIASES.get(str(g).strip().upper(), str(g).strip().upper())
+CURATED_DIR = [
+    ("TGFB1","CCN2"),("TGFB1","CCN1"),("TGFB1","COL1A1"),("TGFB1","COL1A2"),("TGFB1","COL3A1"),
+    ("TGFB1","COL11A1"),("TGFB1","FN1"),("TGFB1","ACTA2"),("TGFB1","TIMP1"),("TGFB1","SERPINE1"),
+    ("TGFB1","SPARC"),("TGFB1","BGN"),("TGFB1","VIM"),("TGFB1","TAGLN"),("TGFB1","LOX"),
+    ("ACTA2","CNN1"),("ACTA2","TAGLN"),("ACTA2","CALD1"),("ACTA2","ACTG2"),
+    ("CCN2","ITGB1"),("CCN1","ITGB1"),("CCN2","COL1A1"),("SPARC","COL1A1"),("BGN","COL1A1"),
+    ("LOX","COL1A1"),("PDGFB","PDGFRB"),("PDGFRB","ACTA2"),("THBS1","CD47"),("CXCL12","CXCR4"),
+    ("SPP1","ITGB1"),("SPP1","CD44"),("LGALS1","PTPRC"),("FN1","ITGB1"),("FN1","ITGA5"),
+]
+
+def network_profile(model, gene_names):
+    """Two centrality signals per gene:
+    UNDIRECTED (degree): strong couplings in the learned G2G -> data-derived hub-ness (strong claim).
+    DIRECTED (out_degree): curated pathway edges where this gene is the SOURCE -> upstream-ness
+        (direction IMPORTED from pathways, NOT learned -- weaker, caveated claim)."""
+    Wraw = model.conv1.lin.weight.detach().cpu().numpy()
+    W = np.asarray(normalize_g2g_sparse_signed((Wraw + Wraw.T) / 2), dtype=float)
+    np.fill_diagonal(W, 0); deg = (np.abs(W) >= THRESHOLD).sum(1)
+    hub_cut = np.percentile(deg[deg > 0], 80) if (deg > 0).any() else 1
+    # directed out-degree: count curated pathway edges (source->target) among genes present & coupled
+    present = set(_canon(g) for g in gene_names); gi = {_canon(g): i for i, g in enumerate(gene_names)}
+    out_deg = {g: 0 for g in gene_names}
+    for s, t in CURATED_DIR:
+        s, t = _canon(s), _canon(t)
+        if s in present and t in present:
+            # only count if the coupling actually exists in the learned network (edge is real in-data)
+            if abs(W[gi[s], gi[t]]) >= THRESHOLD:
+                # map canonical back to the gene_names entry
+                for orig in gene_names:
+                    if _canon(orig) == s: out_deg[orig] += 1; break
+    out_cut = 1   # upstream if it directs >=1 in-network pathway edge (sparse panel)
+    prof = {}
+    for i, g in enumerate(gene_names):
+        od = out_deg.get(g, 0)
+        prof[g] = {"degree": int(deg[i]),
+                   "supportive_links": int((W[i] >= THRESHOLD).sum()),
+                   "antagonistic_links": int((W[i] <= -THRESHOLD).sum()),
+                   "is_hub": bool(deg[i] >= hub_cut and deg[i] > 0),   # undirected, data-derived
+                   "out_degree": int(od),
+                   "is_upstream": bool(od >= out_cut)}                  # directed, pathway-imported
+    return prof
+
+def save_map(coords, tum, src_mask, before_full, after_full, path, pop, section):
+    diff_full = after_full - before_full; x, y = coords[:, 0], coords[:, 1]
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(6, 6))
+    fig.patch.set_facecolor("#0d0d0d"); ax.set_facecolor("#0d0d0d")
+    ax.scatter(x, y, s=6, c="#141414")
+    dt = diff_full[tum]; lim = np.percentile(np.abs(dt), 98) + 1e-12
+    s = ax.scatter(x[tum], y[tum], s=14, c=dt, cmap="RdBu_r",
+                   norm=TwoSlopeNorm(0, -lim, lim), edgecolors="#000", linewidths=0.15)
+    ax.scatter(x[src_mask], y[src_mask], s=7, c="none", edgecolors="#E0A458", linewidths=0.4)
+    ax.set_title(f"{section}: knock out {pop}\nblue = tumour suppressed", color="w", fontsize=11)
+    ax.set_xticks([]); ax.set_yticks([]); ax.set_aspect("equal")
+    fig.colorbar(s, ax=ax, fraction=0.045, label="tumour Δ")
+    fig.savefig(path, facecolor="#0d0d0d", bbox_inches="tight", dpi=130); plt.close(fig)
+
+# ---------------- engine ----------------
+def run_section(name, h5, drvp, label, relax, do_maps):
+    t0 = time.time()
+    print(f"\n===== {name} ({label}) =====", flush=True)
+    tmp, a = prep(h5); gene_names = list(a.var_names); n = len(gene_names)
+    g2i = {g: i for i, g in enumerate(gene_names)}
+    drv = pd.read_csv(drvp)
+    ct = a.obs[CELLTYPE_COL].astype(str).values
+    themes = a.obs[THEME_COL].astype(str).values
+    tum_rows = np.isin(themes, list(TUMOUR_THEMES))
+    tum_cols = [g2i[g] for g in drv[drv.theme.isin(TUMOUR_THEMES)].gene.unique() if g in g2i]
+    tum_gene_names = set(gene_names[i] for i in tum_cols)
+    coords = a.obsm["spatial"]; expr = unit_norm(a); edges = edges_of(coords)
+    loader = get_dataset_loaders(tmp, sample_id_name=SAMPLE_ID, n_neighbors=K,
+                                 distance=None, device=device, verbose=False)
+    os.unlink(tmp)
+    print("  training model...", flush=True); model = train_sparse(loader, n)
+    prof = network_profile(model, gene_names)
+    base = relax(model, expr, edges, n)
+    n_spots = base.shape[0]
+    base_tum_full = np.zeros(n_spots); base_tum_full[tum_rows] = base[tum_rows][:, tum_cols].mean(1)
+    print(f"  base relaxed ({time.time()-t0:.0f}s). ranking populations...", flush=True)
+
+    pop_counts = pd.Series(ct).value_counts()
+    pops = []
+    gene_table = {}     # EVALUATE lookup: gene -> {effect, population, hub...}
+    for pop, n_sp in pop_counts.items():
+        sub = drv[drv.cell_type == pop].head(TOP) if "cell_type" in drv.columns else pd.DataFrame()
+        all_g = [g for g in sub.gene if g in g2i]
+        src = np.where(ct == pop)[0]
+        if not all_g or len(src) == 0: continue
+        uniq = [g for g in all_g if g not in tum_gene_names]       # mechanistic: unique drivers only
+        overlap = round((len(all_g) - len(uniq)) / max(len(all_g), 1), 3)
+        gidx = [g2i[g] for g in uniq]
+        if not gidx: continue
+        cf = relax(model, knockout(expr, gidx, src), edges, n)
+        eff = float((cf - base)[tum_rows][:, tum_cols].mean())
+        is_self = pop in EXCLUDE
+        pops.append(dict(name=pop, n_spots=int(n_sp), theme=sub.theme.iloc[0] if len(sub) else "?",
+                         tumour_effect=round(eff, 6), overlap_frac=overlap,
+                         clean=(overlap < 0.2 and not is_self), is_self=is_self,
+                         uniq=uniq, src=src, cf=cf))
+        print(f"  {pop:26s} eff={eff:+.5f} overlap={overlap} n={n_sp}"
+              + (" [SELF]" if is_self else (" [shared]" if overlap>=0.2 else "")), flush=True)
+
+    genuine = sorted([p for p in pops if not p["is_self"]],
+                     key=lambda p: (not p["clean"], p["tumour_effect"]))
+    # DRILL all clean, non-self populations with enough spots (agent can then discuss ANY of them).
+    # Only skip: self-signal populations, and tiny ones where per-gene effects would be pure noise.
+    MIN_DRILL_SPOTS = 50
+    drill_ids = set(id(p) for p in genuine
+                    if p["clean"] and p["n_spots"] >= MIN_DRILL_SPOTS)
+    print(f"  drilling {len(drill_ids)} populations (clean, n>={MIN_DRILL_SPOTS}): "
+          + ", ".join(p["name"] for p in genuine if id(p) in drill_ids), flush=True)
+
+    populations = []
+    for p in pops:
+        drill = id(p) in drill_ids
+        gene_effects = []
+        if drill:
+            for g in p["uniq"]:
+                cfg = relax(model, knockout(expr, [g2i[g]], p["src"]), edges, n)
+                ge = float((cfg - base)[tum_rows][:, tum_cols].mean())
+                pr = prof.get(g, {"degree":0,"is_hub":False,"supportive_links":0,"antagonistic_links":0,
+                                  "out_degree":0,"is_upstream":False})
+                # priority target = suppresses tumour AND (coupling-hub OR pathway-upstream)
+                priority = bool(ge < 0 and (pr["is_hub"] or pr["is_upstream"]))
+                rec = {"gene": g, "effect": round(ge, 6),
+                       "degree": pr["degree"], "is_hub": pr["is_hub"],              # undirected (data-derived)
+                       "out_degree": pr["out_degree"], "is_upstream": pr["is_upstream"],  # directed (pathway-imported)
+                       "supportive_links": pr["supportive_links"],
+                       "antagonistic_links": pr["antagonistic_links"],
+                       "priority_target": priority}
+                gene_effects.append(rec)
+                if g not in gene_table or ge < gene_table[g]["effect"]:
+                    gene_table[g] = {"effect": round(ge, 6), "population": p["name"],
+                                     "is_hub": pr["is_hub"], "degree": pr["degree"],
+                                     "is_upstream": pr["is_upstream"], "out_degree": pr["out_degree"],
+                                     "priority_target": priority}
+            # rank: priority (effect+network) first, then by effect
+            gene_effects.sort(key=lambda r: (not r["priority_target"], r["effect"]))
+        smap = None
+        if drill and do_maps:
+            after_full = np.zeros(n_spots); after_full[tum_rows] = p["cf"][tum_rows][:, tum_cols].mean(1)
+            mp = f"{MAPDIR}/{name}_{p['name'].replace(' ','_').replace('/','_')}.png"
+            save_map(coords, tum_rows, (ct == p["name"]), base_tum_full, after_full, mp, p["name"], label)
+            smap = os.path.relpath(mp, OUTDIR)
+        populations.append({
+            "name": p["name"], "n_spots": p["n_spots"], "theme": p["theme"],
+            "tumour_effect": p["tumour_effect"], "tumour_overlap_frac": p["overlap_frac"],
+            "clean_cross_compartment": p["clean"], "is_self_signal": p["is_self"],
+            "powered": bool(p["n_spots"] >= 100), "top_genes": gene_effects,
+            "spatial_map": smap,
+        })
+    populations.sort(key=lambda p: (p["is_self_signal"], not p["clean_cross_compartment"], p["tumour_effect"]))
+    for i, p in enumerate(populations): p["rank"] = i + 1
+    print(f"  section done in {time.time()-t0:.0f}s | {len(gene_table)} genes in evaluate-table", flush=True)
+    return {"label": label, "n_spots_total": int(len(ct)), "n_tumour_readout_genes": len(tum_cols),
+            "populations": populations, "gene_table": gene_table}
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fast", action="store_true", help="skip maps (fastest)")
+    ap.add_argument("--steps", type=int, default=40, help="relax SCM steps (lower=faster; default 40)")
+    args = ap.parse_args()
+    relax = make_relax(args.steps)
+    outpath = f"{OUTDIR}/perturbo_data.json"
+    if os.path.exists(outpath):
+        data = json.load(open(outpath)); print(f"resuming; have: {list(data.get('sections',{}).keys())}")
+    else:
+        data = {"tool": "Perturbo", "modes": ["discover", "evaluate"],
+                "unit": "cell population -> target gene -> spatial",
+                "disclaimer": "Predicted, causal-given-model: prioritized hypotheses requiring experimental validation.",
+                "relax_steps": args.steps, "sections": {}}
+    for nm, (h5, drvp, lab) in SECTIONS.items():
+        if nm in data["sections"]:
+            print(f"skip {nm} (done)"); continue
+        try:
+            data["sections"][nm] = run_section(nm, h5, drvp, lab, relax, do_maps=not args.fast)
+            json.dump(data, open(outpath, "w"), indent=2); print(f"  saved {nm}", flush=True)
+        except Exception as e:
+            import traceback; print(f"  {nm} FAILED: {e}"); traceback.print_exc()
+    print(f"\ndone -> {outpath} | sections: {list(data['sections'].keys())}")
+
+if __name__ == "__main__":
+    main()
